@@ -1,0 +1,48 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate YAML syntax
+        run: |
+          python3 -c "
+          import yaml, sys, pathlib
+          bad = False
+          for p in pathlib.Path('.').rglob('*.y*ml'):
+              try:
+                  list(yaml.safe_load_all(p.read_text()))
+                  print(f'OK  {p}')
+              except Exception as e:
+                  print(f'ERR {p}: {e}'); bad = True
+          sys.exit(1 if bad else 0)
+          "
+
+      - name: Validate nginx config
+        run: |
+          docker run --rm -v "$PWD/nginx:/etc/nginx/conf.d:ro" nginx:alpine \
+            nginx -t 2>&1 | tee /tmp/out
+          # 只在 conf.d 內容有語法錯時失敗；缺少外部 include 屬預期
+          grep -q "syntax is ok" /tmp/out || \
+            grep -q "open() \"/etc/nginx/secrets" /tmp/out
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh
+
+      - name: Scan for committed secrets
+        run: |
+          if grep -rInE '(sk-[a-zA-Z0-9]{20,}|Bearer [a-zA-Z0-9_\-]{20,})' \
+               --exclude-dir=.git --exclude='*.md' . ; then
+            echo "::error::疑似有金鑰被 commit 進來"
+            exit 1
+          fi
+          echo "未發現外洩金鑰"

@@ -1,0 +1,51 @@
+services:
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: litellm-proxy
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定}
+      AGNES_API_KEY:      ${AGNES_API_KEY:?請在 .env 設定}
+      DATABASE_URL:       postgresql://litellm:${PG_PASSWORD}@postgres:5432/litellm
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # OPENAI_API_KEY:    ${OPENAI_API_KEY}
+    extra_hosts:
+      # 讓容器內能打到宿主機的 Ollama
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # ---- Postgres：用於 spend tracking 與 virtual key 管理 ----
+  # 若你只要限流、不要記帳，可以把整個 postgres 服務、
+  # DATABASE_URL、以及 config.yaml 裡的 success_callback 全部拿掉。
+  postgres:
+    image: postgres:16-alpine
+    container_name: litellm-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?請在 .env 設定}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

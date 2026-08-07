@@ -1,0 +1,79 @@
+# ============================================================
+#  LiteLLM Proxy 設定
+#  掛在 Hermes / OpenClaw 前面，做真正的 RPM / TPM 節流 + 記帳
+# ============================================================
+
+model_list:
+
+  # ---- Agnes（免費但 20 RPM，留 buffer 設 15）----
+  - model_name: agnes-flash
+    litellm_params:
+      model: openai/agnes-2.5-flash          # openai/ 前綴 = 走 OpenAI 相容協定
+      api_base: https://apihub.agnes-ai.com/v1
+      api_key: os.environ/AGNES_API_KEY
+      rpm: 15                                 # ← 這裡是真正的節流
+      tpm: 300000
+      timeout: 300
+    model_info:
+      # Agnes 目前標 $0，但標準價是 0.03 / 0.15 per 1M
+      # 先按標準價記帳，之後恢復收費時報表不用重算
+      input_cost_per_token:  0.00000003
+      output_cost_per_token: 0.00000015
+
+  # ---- 地端 Qwen（心跳 / 低價值任務走這條，不消耗雲端配額）----
+  - model_name: local-qwen
+    litellm_params:
+      model: openai/qwen2.5:14b
+      api_base: http://127.0.0.1:11434/v1     # Ollama
+      api_key: "dummy"
+      rpm: 600
+    model_info:
+      input_cost_per_token:  0
+      output_cost_per_token: 0
+
+  # ---- 正式線用的模型（範例，依你實際 key 填）----
+  # - model_name: sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     rpm: 45
+  #     tpm: 400000
+
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+
+  # 打不通時的降級鏈：Agnes 掛了就退回地端 Qwen
+  fallbacks:
+    - agnes-flash: ["local-qwen"]
+
+  # 429 專用降級（跟一般錯誤分開處理）
+  context_window_fallbacks: []
+  num_retries: 3
+  retry_after: 5
+  allowed_fails: 3
+  cooldown_time: 60          # 連續失敗後把該 model 冷卻 60 秒
+  timeout: 300
+
+
+litellm_settings:
+  drop_params: true          # 上游不支援的參數自動丟掉，避免 400
+  request_timeout: 300
+  set_verbose: false
+  # 把每筆請求的用量寫進 DB，供你的 Flask dashboard 讀
+  success_callback: ["postgres"]
+  failure_callback: ["postgres"]
+
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+
+  # 每把 virtual key 可獨立設預算與限速 —
+  # 這正好對應你「多組織 / 多團隊分攤成本」的需求
+  # 建 key：
+  #   curl -X POST http://localhost:4000/key/generate \
+  #     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  #     -H "Content-Type: application/json" \
+  #     -d '{"models":["agnes-flash"],"rpm_limit":5,
+  #          "max_budget":10,"metadata":{"team":"sre","host":"agent-qa02"}}'

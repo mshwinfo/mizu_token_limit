@@ -1,0 +1,30 @@
+# ===== Secrets（最重要，不要動這一段）=====
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*-key.conf
+secrets/
+**/secrets/
+
+# ===== 執行期產物 =====
+*.log
+logs/
+pgdata/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 本機覆寫 =====
+docker-compose.override.yml
+config.local.yaml
+
+# ===== OS / Editor =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
