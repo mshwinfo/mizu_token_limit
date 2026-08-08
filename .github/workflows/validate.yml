@@ -55,3 +55,28 @@ jobs:
             exit 1
           fi
           echo "未發現外洩金鑰"
+
+  # ------------------------------------------------------------
+  #  自動合併：lint 全過的 PR 直接 squash 進 main
+  #
+  #  ・只處理「非 draft」的 PR —— 還不想合的就保持 draft 狀態
+  #  ・合併後自動刪除來源分支
+  #  ・⚠️ 任何人開的 PR 只要 lint 過都會被合併；
+  #    這個 repo 目前是個人設定檔專案所以可接受，
+  #    若之後有外部協作者，把下面的 if 加上
+  #    github.event.pull_request.user.login == 'mshwinfo'
+  # ------------------------------------------------------------
+  automerge:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Squash merge the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge --squash --delete-branch \
+            "${{ github.event.pull_request.html_url }}"
