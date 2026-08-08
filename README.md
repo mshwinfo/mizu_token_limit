@@ -45,6 +45,7 @@ consolidation 在你睡覺時都還在消耗配額，一次多步規劃加 tool 
 | Provider 降級 | ❌ | ✅ |
 | 用量記帳 / 預算 | ❌ | ✅ per-key |
 | 多 provider 統一入口 | 手動加 location | ✅ |
+| Web 管理界面 | ❌ | ✅ `/ui` |
 
 **建議：nginx 先止血，LiteLLM 當正解。**
 
@@ -72,6 +73,29 @@ curl http://localhost:4000/health/liveliness
 ```
 
 Agent base URL 改成 `http://<gw-host>:4000/v1`
+
+### Web 管理界面（Admin UI）
+
+LiteLLM 內建管理界面，啟動後打開：
+
+```
+http://<gw-host>:4000/ui
+```
+
+預設帳號 `admin`、密碼 = `LITELLM_MASTER_KEY`
+（要另外設帳密的話，在 `.env` 填 `UI_USERNAME` / `UI_PASSWORD`
+並解除 docker-compose.yml 對應兩行的註解）。
+
+在界面上可以直接：
+
+- **新增 / 修改模型**（接新 provider 就在這裡點，填 model、api_base、api key）
+  ——已開 `store_model_in_db: true`，UI 上加的模型**即時生效，
+  不用改 config.yaml、不用重啟容器**
+- **發 virtual key**：per-key 設 RPM、TPM、預算、可用模型
+- **看用量報表**：per-key / per-model / per-team 的請求數與花費
+
+> config.yaml 裡的 model_list 仍照常載入；UI 加的模型存在 Postgres，
+> 兩邊並存。想進版控的模型寫 config.yaml，臨時試的用 UI 加。
 
 ### 驗證限流真的生效
 

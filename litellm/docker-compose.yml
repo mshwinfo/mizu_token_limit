@@ -13,6 +13,10 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定}
       AGNES_API_KEY:      ${AGNES_API_KEY:?請在 .env 設定}
       DATABASE_URL:       postgresql://litellm:${PG_PASSWORD}@postgres:5432/litellm
+      # ---- Admin UI 登入（http://<host>:4000/ui）----
+      # 不設的話預設帳號是 admin、密碼 = LITELLM_MASTER_KEY
+      # UI_USERNAME: ${UI_USERNAME}
+      # UI_PASSWORD: ${UI_PASSWORD}
       # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # OPENAI_API_KEY:    ${OPENAI_API_KEY}
     extra_hosts:
@@ -28,9 +32,9 @@ services:
       retries: 3
       start_period: 40s
 
-  # ---- Postgres：用於 spend tracking 與 virtual key 管理 ----
-  # 若你只要限流、不要記帳，可以把整個 postgres 服務、
-  # DATABASE_URL、以及 config.yaml 裡的 success_callback 全部拿掉。
+  # ---- Postgres：用於 spend tracking、virtual key 管理與 Admin UI ----
+  # 若你只要限流、不要記帳也不要 Web 界面，可以把整個 postgres 服務、
+  # DATABASE_URL、以及 config.yaml 裡的 store_model_in_db 全部拿掉。
   postgres:
     image: postgres:16-alpine
     container_name: litellm-pg
