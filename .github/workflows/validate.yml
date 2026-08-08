@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # ready_for_review 不在預設事件裡 —— 少了它，
+    # draft 轉 ready 時不會重跑 CI，automerge 就永遠不會觸發
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   lint:
