@@ -13,15 +13,24 @@ jobs:
 
       - name: Validate YAML syntax
         run: |
+          # 用 os.walk 而不是 pathlib.rglob —
+          # rglob 的萬用字元不會進入 .github 等點開頭目錄，
+          # 會漏掉 workflow 檔自己
           python3 -c "
-          import yaml, sys, pathlib
+          import yaml, sys, os
           bad = False
-          for p in pathlib.Path('.').rglob('*.y*ml'):
-              try:
-                  list(yaml.safe_load_all(p.read_text()))
-                  print(f'OK  {p}')
-              except Exception as e:
-                  print(f'ERR {p}: {e}'); bad = True
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d != '.git']
+              for f in files:
+                  if not f.endswith(('.yml', '.yaml')):
+                      continue
+                  p = os.path.join(root, f)
+                  try:
+                      with open(p) as fh:
+                          list(yaml.safe_load_all(fh))
+                      print(f'OK  {p}')
+                  except Exception as e:
+                      print(f'ERR {p}: {e}'); bad = True
           sys.exit(1 if bad else 0)
           "
 

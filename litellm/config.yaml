@@ -24,7 +24,9 @@ model_list:
   - model_name: local-qwen
     litellm_params:
       model: openai/qwen2.5:14b
-      api_base: http://127.0.0.1:11434/v1     # Ollama
+      # ⚠️ LiteLLM 跑在容器裡，127.0.0.1 是容器自己，打不到宿主機！
+      # 要用 host.docker.internal（docker-compose 已設 extra_hosts 對應）
+      api_base: http://host.docker.internal:11434/v1   # 宿主機上的 Ollama
       api_key: "dummy"
       rpm: 600
     model_info:
@@ -60,14 +62,19 @@ litellm_settings:
   drop_params: true          # 上游不支援的參數自動丟掉，避免 400
   request_timeout: 300
   set_verbose: false
-  # 把每筆請求的用量寫進 DB，供你的 Flask dashboard 讀
-  success_callback: ["postgres"]
-  failure_callback: ["postgres"]
+  # 用量記帳不用另外設 callback —
+  # general_settings.database_url 設好後，每筆請求會自動寫進
+  # LiteLLM_SpendLogs，供報表 / dashboard 讀
 
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
+
+  # 讓 Admin UI（http://<host>:4000/ui）上新增 / 修改的模型存進 DB，
+  # 即時生效、不用改這個檔也不用重啟容器。
+  # config.yaml 裡的 model_list 仍會照常載入，兩邊並存。
+  store_model_in_db: true
 
   # 每把 virtual key 可獨立設預算與限速 —
   # 這正好對應你「多組織 / 多團隊分攤成本」的需求

@@ -42,13 +42,13 @@ echo "狀態碼分佈："
 cat "$TMP"/* | awk '{print $1}' | sort | uniq -c | sort -rn | sed 's/^/  /'
 
 echo
+# 先用 sort -n 排序再統計，避免依賴 gawk 專屬的 asort()
+# （Debian / Ubuntu 精簡環境的預設 awk 是 mawk，沒有 asort）
 echo "耗時（秒）："
-cat "$TMP"/* | awk '
-  {t[NR]=$2; s+=$2; if($2>max)max=$2}
-  END{
-    n=asort(t);
-    printf "  min %.2f  median %.2f  max %.2f  avg %.2f\n", t[1], t[int(n/2)+1], max, s/NR
-  }' 2>/dev/null || cat "$TMP"/* | awk '{s+=$2; if($2>m)m=$2} END{printf "  avg %.2f  max %.2f\n", s/NR, m}'
+cat "$TMP"/* | awk '{print $2}' | sort -n | awk '
+  {t[NR]=$1; s+=$1}
+  END{printf "  min %.2f  median %.2f  max %.2f  avg %.2f\n",
+      t[1], t[int((NR+1)/2)], t[NR], s/NR}'
 
 echo
 echo "判讀："
