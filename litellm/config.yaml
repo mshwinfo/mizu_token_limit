@@ -33,13 +33,62 @@ model_list:
       input_cost_per_token:  0
       output_cost_per_token: 0
 
-  # ---- 正式線用的模型（範例，依你實際 key 填）----
-  # - model_name: sonnet
+  # ============================================================
+  #  其他家模型 —— 要用哪家就：
+  #    1. 在 .env 填該家的 API key
+  #    2. 把下面對應區塊解除註解
+  #    3. docker compose restart litellm
+  #  或者不改檔，直接在 Web UI（/ui → Models → Add Model）新增，即時生效。
+  #
+  #  model_name 是 agent 和 access/teams.yaml 用的名字，可以自己取；
+  #  model 是「provider/官方型號」，型號以各家官網為準。
+  #  以下型號都在 LiteLLM 內建價目表裡，費用會自動計算，不用填 cost。
+  #  rpm / tpm 請依你帳號在該家的實際額度填，留 buffer。
+  # ============================================================
+
+  # ---- Anthropic ----
+  # - model_name: claude-sonnet
   #   litellm_params:
-  #     model: anthropic/claude-sonnet-4-5
+  #     model: anthropic/claude-sonnet-5
   #     api_key: os.environ/ANTHROPIC_API_KEY
   #     rpm: 45
   #     tpm: 400000
+  # - model_name: claude-haiku
+  #   litellm_params:
+  #     model: anthropic/claude-haiku-4-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     rpm: 45
+
+  # ---- OpenAI ----
+  # - model_name: gpt-5
+  #   litellm_params:
+  #     model: openai/gpt-5
+  #     api_key: os.environ/OPENAI_API_KEY
+  #     rpm: 60
+  # - model_name: gpt-5-mini
+  #   litellm_params:
+  #     model: openai/gpt-5-mini
+  #     api_key: os.environ/OPENAI_API_KEY
+  #     rpm: 60
+
+  # ---- Google Gemini ----
+  # - model_name: gemini-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+  #     rpm: 30
+
+  # ---- DeepSeek ----
+  # - model_name: deepseek-chat
+  #   litellm_params:
+  #     model: deepseek/deepseek-chat
+  #     api_key: os.environ/DEEPSEEK_API_KEY
+
+  # ---- OpenRouter（一把 key 用多家模型）----
+  # - model_name: or-deepseek
+  #   litellm_params:
+  #     model: openrouter/deepseek/deepseek-chat
+  #     api_key: os.environ/OPENROUTER_API_KEY
 
 
 router_settings:

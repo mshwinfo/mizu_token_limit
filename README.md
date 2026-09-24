@@ -46,6 +46,7 @@ consolidation 在你睡覺時都還在消耗配額，一次多步規劃加 tool 
 | 用量記帳 / 預算 | ❌ | ✅ per-key |
 | 多 provider 統一入口 | 手動加 location | ✅ |
 | Web 管理界面 | ❌ | ✅ `/ui` |
+| 團隊 / 個人分層限制 | ❌ | ✅ `access/teams.yaml` |
 
 **建議：nginx 先止血，LiteLLM 當正解。**
 
@@ -68,9 +69,12 @@ Agent base URL 改成 `http://<gw-host>:8080/agnes/v1`
 ```bash
 cp .env.example .env && chmod 600 .env
 $EDITOR .env                      # 填入實際金鑰
-cd litellm && docker compose up -d
+cd litellm && docker compose --env-file ../.env up -d
 curl http://localhost:4000/health/liveliness
 ```
+
+> `--env-file ../.env` 不能省：docker compose 預設只讀執行目錄
+> （`litellm/`）的 `.env`，讀不到 repo 根目錄那份。
 
 Agent base URL 改成 `http://<gw-host>:4000/v1`
 
@@ -83,8 +87,7 @@ http://<gw-host>:4000/ui
 ```
 
 預設帳號 `admin`、密碼 = `LITELLM_MASTER_KEY`
-（要另外設帳密的話，在 `.env` 填 `UI_USERNAME` / `UI_PASSWORD`
-並解除 docker-compose.yml 對應兩行的註解）。
+（要另外設帳密的話，在 `.env` 填 `UI_USERNAME` / `UI_PASSWORD`）。
 
 在界面上可以直接：
 
@@ -137,20 +140,119 @@ agent 端會誤判成逾時或無回應。
 
 ---
 
-## 成本分攤（LiteLLM）
+## 接其他家模型（LiteLLM）
 
-每台 agent 發一把獨立 virtual key，`metadata` 會寫進 Postgres：
+兩種方式擇一：
 
-```bash
-export LITELLM_MASTER_KEY=...
-./scripts/create-agent-key.sh agent-qa02 sre 5 10
-./scripts/create-agent-key.sh agent-as06 sre 5 10
+**A. 寫進設定檔（進版控）**
+
+1. `.env` 填該家金鑰，例如 `OPENAI_API_KEY=sk-...`
+2. `litellm/config.yaml` 把對應區塊解除註解
+   （已備好 Anthropic、OpenAI、Gemini、DeepSeek、OpenRouter 範本）
+3. `docker compose --env-file ../.env restart litellm`
+
+**B. Web UI 直接加（不用重啟）**
+
+`/ui → Models → Add Model`，填 provider、型號、金鑰，存檔即時生效。
+
+不論哪種，agent 端都一樣打 `http://<gw-host>:4000/v1`，只換 `model` 名稱。
+範本裡的型號都在 LiteLLM 內建價目表內，**費用自動計算**，不用自己填單價。
+
+---
+
+## 團隊與個人限制（LiteLLM）
+
+在 `access/teams.yaml` 定義誰屬於哪個團隊、各自能用哪些模型、能花多少、
+能打多快，再用一支腳本同步進 LiteLLM。設定檔進版控，誰改了什麼一目了然。
+
+### 四層限制，最嚴格的先擋
+
+```
+團隊   budget / rpm / tpm / models    全隊共用一個額度
+ └ 成員  budget                       這個人在這個團隊能花多少
+    └ key  rpm / tpm / budget / models  單一台 agent 的上限
+個人   rpm / tpm                      這個人所有 key 加總（跨團隊）
 ```
 
-三台各 5 RPM，加總卡在安全線內；報表直接從
-`LiteLLM_SpendLogs` join `metadata->>'team'` 就有分攤結果。
+範例（完整說明見 `access/teams.yaml` 裡的註解）：
 
-對於**沒有 Admin API 的 provider**（例如 Agnes），這是唯一能拿到
+```yaml
+users:
+  alice: {email: alice@example.com, rpm: 10}
+
+teams:
+  sre:
+    models: [agnes-flash, local-qwen]   # 這隊只能用這兩個模型
+    budget: 50                          # 全隊每 30 天 $50
+    rpm: 12                             # 全隊共用
+    member_budget: 10                   # 每人預設 $10
+    members:
+      alice:
+        budget: 20                      # alice 例外給 $20
+        keys:
+          agent-qa02: {rpm: 5}          # 她的 agent 各自再限速
+```
+
+### 日常操作
+
+```bash
+pip install pyyaml
+python3 scripts/sync-access.py validate   # 檢查設定檔（打錯欄位、模型越權都會擋）
+python3 scripts/sync-access.py plan       # 預覽會改什麼，不寫入
+python3 scripts/sync-access.py apply --keys-file new-keys.env   # 套用；新 key 寫進檔案（權限 600）
+python3 scripts/sync-access.py report     # 每隊、每人、每把 key 的花費 / 上限 / 使用率
+```
+
+- `apply` 可以重複執行，已同步的東西不會重複建立
+- 從設定檔刪掉的成員 / key 預設**只警告不刪除**，要加 `--prune` 才會真的移除
+- ⚠️ 把人移出團隊時，LiteLLM 會**一併刪除他在該隊的所有 key**，`plan` 會先告訴你幾把
+- 管理金鑰讀 `LITELLM_MASTER_KEY` 環境變數，沒設的話自動讀 repo 根目錄的 `.env`
+
+### 每個人自己查額度
+
+發給成員自己跑，只需要他自己的 key，**看不到其他人的花費**：
+
+```bash
+python3 scripts/my-usage.py sk-他的key
+```
+
+```
+■ 這把 key：agent-as06
+  花費      $0.00 / 不限
+  RPM / TPM 7 / 不限
+■ 所屬團隊：SRE 團隊
+  全隊      $12.40 / $50.00（25%），每 30d 重置，下次 2026-10-01
+  我在本隊  $8.10 / $20.00（41%），每 30d 重置，下次 2026-10-01
+■ 我（alice）
+  RPM / TPM 10 / 200,000（我所有 key 加總）
+```
+
+### 實測過的坑
+
+以上每一層都在 LiteLLM 1.102 上實際打請求驗證過會擋，另外發現：
+
+- **「每人費用上限」一定要設在團隊成員層**（`members.<人>.budget`）。
+  LiteLLM 的個人全域預算只對「不屬於任何團隊的 key」有效，
+  團隊 key 打爆了也不會擋，所以設定檔刻意不提供這個欄位
+- **超額後，連查詢用量的 API 都會回 429**，`my-usage.py` 會改為顯示是哪一層超額
+- 個人 RPM 無法透過 API 清除（只能改數值），要取消請到 Web UI
+
+### 跟 Web UI 的關係
+
+兩邊操作的是同一份資料，Web UI 上也看得到、改得到這些團隊和 key。
+建議**以 `teams.yaml` 為準**：在 UI 上改了由設定檔管理的欄位，
+下次 `apply` 會被改回設定檔的值（`plan` 會先列出來）。
+設定檔沒提到的團隊、人員、key，腳本完全不會碰。
+
+### 單次發 key
+
+臨時要一把不屬於設定檔的 key，仍可用舊腳本：
+
+```bash
+./scripts/create-agent-key.sh agent-tmp01 sre 5 10
+```
+
+對於**沒有 Admin API 的 provider**（例如 Agnes），LiteLLM 的記帳是唯一能拿到
 用量資料的方式。
 
 ---
@@ -161,11 +263,15 @@ export LITELLM_MASTER_KEY=...
 ├── nginx/
 │   └── llm-gateway.conf          # 反向代理 + limit_req
 ├── litellm/
-│   ├── config.yaml               # per-model rpm/tpm、fallback、cooldown
+│   ├── config.yaml               # 模型清單、per-model rpm/tpm、fallback、cooldown
 │   └── docker-compose.yml        # LiteLLM + Postgres
+├── access/
+│   └── teams.yaml                # 團隊 / 成員 / key 的限制設定
 ├── scripts/
+│   ├── sync-access.py            # teams.yaml → LiteLLM 同步 + 用量報表
+│   ├── my-usage.py               # 成員用自己的 key 查額度
 │   ├── verify-ratelimit.sh       # 併發打點，驗證限流
-│   └── create-agent-key.sh       # 產生 per-agent virtual key
+│   └── create-agent-key.sh       # 單次產生一把 virtual key
 └── .env.example
 ```
 
