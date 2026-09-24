@@ -1,6 +1,7 @@
 # ===== Secrets（最重要，不要動這一段）=====
 .env
 .env.*
+*.env
 !.env.example
 *.key
 *.pem
@@ -20,6 +21,10 @@ data/
 # ===== 本機覆寫 =====
 docker-compose.override.yml
 config.local.yaml
+
+# ===== Python =====
+__pycache__/
+*.pyc
 
 # ===== OS / Editor =====
 .DS_Store

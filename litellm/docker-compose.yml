@@ -9,16 +9,15 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
+    # repo 根目錄的 .env 整份傳進容器 —— 新增 provider 金鑰
+    # （OPENAI_API_KEY、ANTHROPIC_API_KEY…）或 UI_USERNAME / UI_PASSWORD
+    # 只要寫進 .env，不用改這個檔
+    env_file:
+      - ../.env
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定，並用 docker compose --env-file ../.env 啟動}
       AGNES_API_KEY:      ${AGNES_API_KEY:?請在 .env 設定}
       DATABASE_URL:       postgresql://litellm:${PG_PASSWORD}@postgres:5432/litellm
-      # ---- Admin UI 登入（http://<host>:4000/ui）----
-      # 不設的話預設帳號是 admin、密碼 = LITELLM_MASTER_KEY
-      # UI_USERNAME: ${UI_USERNAME}
-      # UI_PASSWORD: ${UI_PASSWORD}
-      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      # OPENAI_API_KEY:    ${OPENAI_API_KEY}
     extra_hosts:
       # 讓容器內能打到宿主機的 Ollama
       - "host.docker.internal:host-gateway"

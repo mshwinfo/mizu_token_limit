@@ -1,0 +1,79 @@
+# ============================================================
+#  團隊 / 個人 / Key 三層權限設定
+#
+#  改完執行：
+#    python3 scripts/sync-access.py plan    # 先看會改什麼（不寫入）
+#    python3 scripts/sync-access.py apply   # 套用到 LiteLLM
+#    python3 scripts/sync-access.py report  # 看每隊、每人的用量 vs 上限
+#
+#  限制是「層層疊加、最嚴格的先擋」：
+#
+#    團隊  budget / rpm / tpm / models   全隊共用一個額度
+#     └ 成員 budget                       這個人在這個團隊能花多少
+#        └ key rpm / tpm / budget / models  單一台 agent 的上限
+#    個人  rpm / tpm                      這個人所有 key 加總（跨團隊）
+#
+#  ⚠️ 「每人費用上限」請設在 teams.<隊>.members.<人>.budget，
+#     不要找個人層的 budget —— LiteLLM 的個人全域預算
+#     不會套用在團隊 key 上（已實測），設了等於沒設。
+#
+#  單位：budget = 美金，rpm = 每分鐘請求數，tpm = 每分鐘 token 數
+#  週期：30d / 7d / 1d / 1mo，到期後已花費歸零重算
+#  models 必須是 litellm/config.yaml 或 Web UI 裡已存在的 model_name
+# ============================================================
+
+# 所有預算的預設週期（各層可用 budget_period 覆蓋）
+budget_period: 30d
+
+# ------------------------------------------------------------
+#  人員
+#  role: user（預設，只能看自己）/ viewer（唯讀看全部）/ admin（管理員）
+# ------------------------------------------------------------
+users:
+  alice:
+    email: alice@example.com
+    rpm: 10              # 她所有 agent 加起來每分鐘最多 10 發
+    tpm: 200000
+  bob:
+    email: bob@example.com
+    rpm: 5
+  carol:
+    email: carol@example.com
+    role: viewer
+
+# ------------------------------------------------------------
+#  團隊
+# ------------------------------------------------------------
+teams:
+
+  sre:
+    name: SRE 團隊
+    models: [agnes-flash, local-qwen]
+    budget: 50           # 全隊每 30 天最多花 $50
+    rpm: 12              # 全隊共用 —— Agnes 上限 20 RPM，這裡留 buffer
+    tpm: 300000
+    member_budget: 10    # 沒另外指定的成員，預設每人 $10
+    members:
+      alice:
+        budget: 20       # alice 例外，給 $20
+        keys:
+          agent-qa02:    # key 別名，全系統唯一
+            rpm: 5
+          agent-as06:
+            rpm: 5
+            models: [agnes-flash]   # 這台只准用 Agnes
+      bob:
+        keys:
+          agent-bob01:
+            rpm: 3
+            budget: 5    # 單把 key 也可以再設上限
+
+  research:
+    name: 研究組
+    models: [local-qwen]            # 只用地端模型，不吃雲端額度
+    rpm: 60
+    members:
+      bob:               # 沒設 budget 也沒 member_budget → 本隊不限金額
+        keys:
+          bob-notebook: {}
+      carol: {}          # 只加入團隊、不發 key（例如只看報表的人）
