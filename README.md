@@ -38,7 +38,7 @@ consolidation 在你睡覺時都還在消耗配額，一次多步規劃加 tool 
 | | nginx | LiteLLM |
 |---|---|---|
 | 部署時間 | ~10 min | ~30 min |
-| 新增服務 | 無 | Docker × 2 |
+| 新增服務 | 無 | Docker（nginx + LiteLLM × N + Redis + Postgres） |
 | RPM 限流 | ✅ | ✅ |
 | TPM（token）限流 | ❌ | ✅ |
 | 超量行為 | 排隊 → 429 | 排隊 + 重試 |
@@ -78,6 +78,20 @@ curl http://localhost:4000/health/liveliness
 
 Agent base URL 改成 `http://<gw-host>:4000/v1`
 
+啟動後的架構：
+
+```
+agent ──► nginx:4000 ──least_conn──► LiteLLM 副本 × N（預設 4）
+                                       │          │
+                                     Redis     Postgres
+                                  （共用計數）（記帳、key、UI）
+```
+
+- 第一次啟動時，`litellm-migrate` 會先建好資料庫結構，完成後自動結束，
+  副本才會啟動。`docker compose ps` 看到它是 `exited (0)` 屬正常
+- 副本數用 `.env` 的 `LITELLM_REPLICAS` 調整，改完再 `up -d` 即可，
+  nginx 會在 10 秒內自動把流量分到新副本，不用重啟
+
 ### Web 管理界面（Admin UI）
 
 LiteLLM 內建管理界面，啟動後打開：
@@ -92,7 +106,7 @@ http://<gw-host>:4000/ui
 在界面上可以直接：
 
 - **新增 / 修改模型**（接新 provider 就在這裡點，填 model、api_base、api key）
-  ——已開 `store_model_in_db: true`，UI 上加的模型**即時生效，
+  ——已開 `store_model_in_db: true`，UI 上加的模型**約 30 秒內同步到所有副本，
   不用改 config.yaml、不用重啟容器**
 - **發 virtual key**：per-key 設 RPM、TPM、預算、可用模型
 - **看用量報表**：per-key / per-model / per-team 的請求數與花費
@@ -149,11 +163,11 @@ agent 端會誤判成逾時或無回應。
 1. `.env` 填該家金鑰，例如 `OPENAI_API_KEY=sk-...`
 2. `litellm/config.yaml` 把對應區塊解除註解
    （已備好 Anthropic、OpenAI、Gemini、DeepSeek、OpenRouter 範本）
-3. `docker compose --env-file ../.env restart litellm`
+3. `docker compose --env-file ../.env restart litellm`（會重啟所有副本）
 
 **B. Web UI 直接加（不用重啟）**
 
-`/ui → Models → Add Model`，填 provider、型號、金鑰，存檔即時生效。
+`/ui → Models → Add Model`，填 provider、型號、金鑰，存檔後約 30 秒內所有副本生效。
 
 不論哪種，agent 端都一樣打 `http://<gw-host>:4000/v1`，只換 `model` 名稱。
 範本裡的型號都在 LiteLLM 內建價目表內，**費用自動計算**，不用自己填單價。
@@ -263,8 +277,9 @@ python3 scripts/my-usage.py sk-他的key
 ├── nginx/
 │   └── llm-gateway.conf          # 反向代理 + limit_req
 ├── litellm/
-│   ├── config.yaml               # 模型清單、per-model rpm/tpm、fallback、cooldown
-│   └── docker-compose.yml        # LiteLLM + Postgres
+│   ├── config.yaml               # 模型清單、per-model rpm/tpm、fallback、Redis 共用計數
+│   ├── docker-compose.yml        # nginx + LiteLLM × N + Redis + Postgres
+│   └── nginx-lb.conf             # 分流到各 LiteLLM 副本
 ├── access/
 │   └── teams.yaml                # 團隊 / 成員 / key 的限制設定
 ├── scripts/
@@ -288,11 +303,61 @@ python3 scripts/my-usage.py sk-他的key
 
 ---
 
+## 部署規格
+
+### 200 人同時使用的建議
+
+| 項目 | 建議 |
+|---|---|
+| CPU | 4 vCPU 起跳，8 vCPU 較寬裕 |
+| 記憶體 | 16 GB（最低 8 GB） |
+| 硬碟 | 100 GB SSD（Postgres 每筆請求記一筆帳） |
+| GPU | 不需要（閘道只轉發，不跑模型） |
+
+雲端約為 AWS m6i.xlarge、GCP e2-standard-4 等級。
+
+### 實測數據
+
+4 vCPU / 16 GB，LiteLLM v1.102.1，假上游模擬每個回應串流 10 秒，
+用一般團隊 key（驗證、限流、記帳全部照常執行）。壓測程式和假上游也跑在同一台，
+所以正式環境只會更寬裕。
+
+| 架構 | 200 人同時串流 | 首字延遲 p50 / p99 |
+|---|---|---|
+| 單一 LiteLLM（舊架構） | 0 錯誤 | 2.9 秒 / 4.9 秒 |
+| **nginx + 4 副本 + Redis（目前架構）** | **0 錯誤，每副本各 200 筆** | **0.9 秒 / 1.5 秒** |
+
+另外驗證過：
+
+- 限流精準：key 設 RPM 4、送 16 發，經過 4 個副本仍然剛好過 4 發；團隊預算也剛好在上限擋下
+- 4 個副本對全新資料庫同時啟動不會衝突（由 `litellm-migrate` 先單獨建好結構）
+- 增加副本時 nginx 不用重啟，15 秒內就會把流量分過去
+- `sync-access.py`、`my-usage.py`、Web UI 經過分流器都正常
+
+### 三個不要拿掉的東西
+
+1. **Redis**：沒有它，每個副本各算各的。實測 4 副本時 key 設 RPM 4 會放行 15 發，
+   團隊預算也會超支
+2. **nginx 分流**：只開多 worker 不夠。長連線會黏在同一個 worker 上，
+   實測一個跑滿、其他閒置，首字延遲 3 秒以上
+3. **`litellm-migrate`**：多個副本同時對空資料庫跑遷移，實測會出現 `deadlock detected`
+
+### 真正的瓶頸是上游額度
+
+閘道每分鐘能處理上千次請求，但 **Agnes 整個帳號只有 20 RPM**，
+200 人共用等於每人每分鐘 0.1 次。要服務 200 人，得提高上游額度，
+或在 `config.yaml` 接多家模型分攤。
+地端模型如果要給 200 人用，需要另一台 GPU 機器跑 vLLM 之類的推論伺服器，
+Ollama 的並行能力不夠。
+
+---
+
 ## 版本注意
 
-LiteLLM 的 `router_settings` schema 各版本會變動。
-啟動若報 unknown field，以[官方文件](https://docs.litellm.ai/docs/proxy/configs)為準。
-`main-stable` tag 上正式環境前建議釘成明確版本號。
+LiteLLM 映像釘在已實測的 `v1.102.1`。LiteLLM 的設定 schema 各版本會變動，
+升級前請先在測試環境跑過 `scripts/verify-ratelimit.sh` 和
+`sync-access.py plan`。啟動若報 unknown field，
+以[官方文件](https://docs.litellm.ai/docs/proxy/configs)為準。
 
 ---
 

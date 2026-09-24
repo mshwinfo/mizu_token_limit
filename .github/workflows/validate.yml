@@ -45,6 +45,15 @@ jobs:
           grep -q "syntax is ok" /tmp/out || \
             grep -q "open() \"/etc/nginx/secrets" /tmp/out
 
+      - name: Validate LiteLLM load balancer & compose
+        run: |
+          # resolve 參數需要 nginx ≥ 1.27.3，用 compose 裡同一個版本驗證
+          docker run --rm -v "$PWD/litellm/nginx-lb.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:1.30-alpine nginx -t
+          printf 'LITELLM_MASTER_KEY=sk-ci\nPG_PASSWORD=ci\nAGNES_API_KEY=ci\n' > .env
+          (cd litellm && docker compose --env-file ../.env config --quiet)
+          rm .env
+
       - name: Shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
