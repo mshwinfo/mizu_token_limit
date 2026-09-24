@@ -125,6 +125,13 @@ general_settings:
   # config.yaml 裡的 model_list 仍會照常載入，兩邊並存。
   store_model_in_db: true
 
+  # 多個 LiteLLM 副本共用 RPM / TPM / 預算計數。
+  # ⚠️ 不能拿掉：沒有它，每個副本各算各的，
+  #    實測 4 副本時 key 設 RPM 4 會放行 15 發、團隊預算也會超支
+  coordination_redis:
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+
   # 每把 virtual key 可獨立設預算與限速 —
   # 這正好對應你「多組織 / 多團隊分攤成本」的需求
   # 建 key：

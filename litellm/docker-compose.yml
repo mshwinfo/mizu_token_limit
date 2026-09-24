@@ -1,14 +1,64 @@
+# ============================================================
+#  架構：
+#    agent ──► nginx:4000 ──least_conn──► litellm × N 副本
+#                                          │        │
+#                                        redis   postgres
+#                                     （共用計數）（記帳、key、UI）
+#
+#  ・副本數用 .env 的 LITELLM_REPLICAS 調整（預設 4，約每 1 vCPU 一個）
+#  ・Redis 讓所有副本共用 RPM / TPM / 預算計數 —— 少了它，
+#    每個副本各算各的，實測 RPM 4 會放行到 15 發
+#  ・litellm-migrate 先建好資料庫結構再結束，副本才啟動
+#  ・啟動：docker compose --env-file ../.env up -d
+# ============================================================
 services:
 
-  litellm:
-    image: ghcr.io/berriai/litellm:main-stable
-    container_name: litellm-proxy
+  # ---- 入口：分流到各 LiteLLM 副本 ----
+  nginx:
+    image: nginx:1.30-alpine
+    container_name: litellm-lb
     restart: unless-stopped
     ports:
       - "4000:4000"
     volumes:
+      - ./nginx-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  # ---- 資料庫遷移：只跑一次，完成後自動結束 ----
+  # 多個副本同時對空資料庫跑遷移，實測會 deadlock；
+  # 所以由這個服務先單獨跑完，副本再以 DISABLE_SCHEMA_UPDATE 啟動。
+  # 遷移失敗時它會以非 0 結束，副本就不會在壞掉的資料庫上啟動。
+  litellm-migrate:
+    image: ghcr.io/berriai/litellm:v1.102.1
+    restart: "no"
+    volumes:
       - ./config.yaml:/app/config.yaml:ro
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/app/config.yaml", "--skip_server_startup", "--enforce_prisma_migration_check"]
+    env_file:
+      - ../.env
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定，並用 docker compose --env-file ../.env 啟動}
+      AGNES_API_KEY:      ${AGNES_API_KEY:?請在 .env 設定}
+      DATABASE_URL:       postgresql://litellm:${PG_PASSWORD}@postgres:5432/litellm
+      REDIS_HOST:         redis
+      REDIS_PORT:         "6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.102.1   # 已實測的版本；升級前先在測試環境跑過
+    restart: unless-stopped
+    deploy:
+      replicas: ${LITELLM_REPLICAS:-4}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    # 每個副本 1 個 worker，由 nginx 負責平均分配
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     # repo 根目錄的 .env 整份傳進容器 —— 新增 provider 金鑰
     # （OPENAI_API_KEY、ANTHROPIC_API_KEY…）或 UI_USERNAME / UI_PASSWORD
     # 只要寫進 .env，不用改這個檔
@@ -18,26 +68,46 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?請在 .env 設定，並用 docker compose --env-file ../.env 啟動}
       AGNES_API_KEY:      ${AGNES_API_KEY:?請在 .env 設定}
       DATABASE_URL:       postgresql://litellm:${PG_PASSWORD}@postgres:5432/litellm
+      REDIS_HOST:         redis
+      REDIS_PORT:         "6379"
+      DISABLE_SCHEMA_UPDATE: "true"   # 結構由 litellm-migrate 負責
     extra_hosts:
       # 讓容器內能打到宿主機的 Ollama
       - "host.docker.internal:host-gateway"
     depends_on:
+      litellm-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
-      interval: 30s
+      # 映像裡沒有 curl，用內建的 Python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=4)"]
+      interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+
+  # ---- Redis：副本間共用限流與預算計數（純記憶體，不需持久化）----
+  redis:
+    image: redis:7-alpine
+    container_name: litellm-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # ---- Postgres：用於 spend tracking、virtual key 管理與 Admin UI ----
-  # 若你只要限流、不要記帳也不要 Web 界面，可以把整個 postgres 服務、
-  # DATABASE_URL、以及 config.yaml 裡的 store_model_in_db 全部拿掉。
   postgres:
     image: postgres:16-alpine
     container_name: litellm-pg
     restart: unless-stopped
+    # 每個 LiteLLM 副本約佔 10 條連線，預設上限 100 在副本多時會不夠
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
